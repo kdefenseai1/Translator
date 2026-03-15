@@ -91,11 +91,17 @@ export function InterpreterApp() {
 
     try {
       const sessionRes = await fetch("/api/realtime/session", { method: "POST" });
-      if (!sessionRes.ok) throw new Error("세션 생성에 실패했습니다.");
+      if (!sessionRes.ok) {
+        const errJson = await sessionRes.json().catch(() => ({}));
+        console.error("Session fetch failed:", errJson);
+        throw new Error(`세션 생성에 실패했습니다: ${errJson.error || sessionRes.statusText}`);
+      }
       const sessionData = await sessionRes.json();
+      console.log("Frontend received sessionData:", sessionData);
       
-      // xAI returns { client_secret: { value: "...", ... } } or similar based on docs
-      const clientSecret = sessionData.client_secret?.value;
+      // xAI may return { client_secret: { value: "..." } } (OpenAI style) 
+      // or directly { value: "..." } based on documentation
+      const clientSecret = sessionData.client_secret?.value || sessionData.value;
 
       if (!clientSecret) throw new Error("유효한 세션 토큰을 받지 못했습니다.");
 

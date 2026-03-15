@@ -25,6 +25,7 @@ export async function POST() {
     }
 
     const data = await response.json();
+    console.log("xAI client_secrets response:", JSON.stringify(data, null, 2));
     return NextResponse.json(data);
   } catch (error) {
     return NextResponse.json({ error: "Failed to create xAI session." }, { status: 500 });
