@@ -8,22 +8,15 @@ import {
   type RealtimeMode,
   type RealtimeVoice,
   REALTIME_MODEL,
-  REALTIME_TRANSCRIBE_MODEL,
   REALTIME_VOICES,
-  supportsGroqSpeech,
+  buildTranslationInstructions,
 } from "@/lib/realtime/session-config";
 
 type ConnectionStatus = "idle" | "connecting" | "connected" | "error";
 
-type SessionInfo = {
-  sessionId: string | null;
-  expiresAt: number | null;
-};
-
 type SourceTurn = {
   id: string;
   text: string;
-  confidence: number | null;
 };
 
 type OutputTurn = {
@@ -31,547 +24,212 @@ type OutputTurn = {
   text: string;
 };
 
-type TurnResponse = {
-  transcript: string;
-  translation: string;
-  confidence: number | null;
-  audioChunks: string[];
-  audioMimeType: string | null;
-  speechProvider: "groq" | "browser" | "none";
-  note: string | null;
-};
-
-type RecorderRefs = {
-  audioContext: AudioContext | null;
-  analyser: AnalyserNode | null;
-  sourceNode: MediaStreamAudioSourceNode | null;
-  animationFrame: number | null;
-  recorder: MediaRecorder | null;
-  recorderStopResolver: (() => void) | null;
-  chunks: Blob[];
-  isSpeaking: boolean;
-  speechStartedAt: number;
-  lastSpeechAt: number;
-  currentTurnStartedAt: number;
-  isSubmitting: boolean;
-};
-
-const FFT_SIZE = 2048;
-const SPEECH_THRESHOLD = 0.018;
-const MIN_SPEECH_MS = 320;
-const SILENCE_MS = 800;
-
-function buildTurnUrl(params: Record<string, string>) {
-  const searchParams = new URLSearchParams(params);
-  return `/api/realtime/turn?${searchParams.toString()}`;
-}
-
-function statusLabel(status: ConnectionStatus) {
-  switch (status) {
-    case "connecting":
-      return "연결 중";
-    case "connected":
-      return "연결됨";
-    case "error":
-      return "오류";
-    default:
-      return "대기 중";
-  }
-}
-
-function formatConfidence(confidence: number | null | undefined) {
-  if (confidence === null || confidence === undefined) {
-    return null;
-  }
-
-  return `신뢰도 ${Math.round(confidence * 100)}%`;
-}
-
-function formatSessionExpiry(expiresAt: number | null) {
-  if (!expiresAt) {
-    return "연결 유지 중";
-  }
-
-  return new Intl.DateTimeFormat("ko-KR", {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  }).format(new Date(expiresAt * 1000));
-}
-
-function pickMimeType() {
-  const candidates = [
-    "audio/webm;codecs=opus",
-    "audio/webm",
-    "audio/mp4",
-    "audio/ogg;codecs=opus",
-  ];
-
-  for (const candidate of candidates) {
-    if (typeof MediaRecorder !== "undefined" && MediaRecorder.isTypeSupported(candidate)) {
-      return candidate;
-    }
-  }
-
-  return "";
-}
-
-function calculateRms(samples: Float32Array) {
-  let total = 0;
-
-  for (let index = 0; index < samples.length; index += 1) {
-    total += samples[index] * samples[index];
-  }
-
-  return Math.sqrt(total / Math.max(1, samples.length));
-}
-
-function readErrorMessage(body: unknown, fallback: string) {
-  if (body && typeof body === "object" && !Array.isArray(body)) {
-    const objectBody = body as Record<string, unknown>;
-
-    if (typeof objectBody.error === "string") {
-      return objectBody.error;
-    }
-
-    if (objectBody.error && typeof objectBody.error === "object" && !Array.isArray(objectBody.error)) {
-      const nested = objectBody.error as Record<string, unknown>;
-      if (typeof nested.message === "string") {
-        return nested.message;
-      }
-    }
-
-    if (typeof objectBody.message === "string") {
-      return objectBody.message;
-    }
-  }
-
-  return fallback;
-}
-
-function createSessionId() {
-  return `dongtongsa-${crypto.randomUUID().slice(0, 8)}`;
-}
-
 export function InterpreterApp() {
+  const wsRef = useRef<WebSocket | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const processorRef = useRef<ScriptProcessorNode | null>(null);
+  const inputSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
   const micStreamRef = useRef<MediaStream | null>(null);
-  const recorderRefs = useRef<RecorderRefs>({
-    audioContext: null,
-    analyser: null,
-    sourceNode: null,
-    animationFrame: null,
-    recorder: null,
-    recorderStopResolver: null,
-    chunks: [],
-    isSpeaking: false,
-    speechStartedAt: 0,
-    lastSpeechAt: 0,
-    currentTurnStartedAt: 0,
-    isSubmitting: false,
-  });
-  const isMutedRef = useRef(false);
-  const activeAudioRef = useRef<HTMLAudioElement | null>(null);
+  const audioBufferRef = useRef<Int16Array[]>([]);
 
   const [mode, setMode] = useState<RealtimeMode>("translate");
   const [sourceLanguage, setSourceLanguage] = useState(SOURCE_AUTO);
-  const [targetLanguage, setTargetLanguage] = useState("en");
+  const [targetLanguage, setTargetLanguage] = useState("ko");
   const [voice, setVoice] = useState<RealtimeVoice>(REALTIME_VOICES[0]);
   const [status, setStatus] = useState<ConnectionStatus>("idle");
   const [statusMessage, setStatusMessage] = useState(
-    "브라우저에서 마이크로 음성을 획득하여 Groq API를 통해 실시간으로 번역하고 전달합니다.",
+    "xAI Voice Agent를 통해 실시간 동시 통역을 제공합니다.",
   );
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [sourceTranscriptError, setSourceTranscriptError] = useState<string | null>(null);
-  const [translatedOutputError, setTranslatedOutputError] = useState<string | null>(null);
-  const [sessionNotes, setSessionNotes] = useState<string[]>([]);
-  const [isMuted, setIsMuted] = useState(false);
-  const [hasMicPermission, setHasMicPermission] = useState(false);
-  const [sessionInfo, setSessionInfo] = useState<SessionInfo>({
-    sessionId: null,
-    expiresAt: null,
-  });
   const [sourceTurns, setSourceTurns] = useState<SourceTurn[]>([]);
   const [outputTurns, setOutputTurns] = useState<OutputTurn[]>([]);
-  const [isCapturingTurn, setIsCapturingTurn] = useState(false);
-  const [isProcessingTurn, setIsProcessingTurn] = useState(false);
+  const [isCapturing, setIsCapturing] = useState(false);
 
   const controlsLocked = status === "connecting" || status === "connected";
-  const audioControlsDisabled = mode !== "interpret" || status !== "connected";
-  const targetLabel = getLanguageLabel(targetLanguage);
-  const targetSpeechLabel = describeSpeechProvider(targetLanguage);
-
-  useEffect(() => {
-    isMutedRef.current = isMuted;
-
-    if (activeAudioRef.current) {
-      activeAudioRef.current.muted = isMuted;
-    }
-
-    if (isMuted) {
-      window.speechSynthesis.cancel();
-    }
-  }, [isMuted]);
 
   useEffect(() => {
     return () => {
-      stopSession({ keepStatus: true });
+      stopSession();
     };
   }, []);
 
-  function appendSessionNote(note: string) {
-    setSessionNotes((current) => [note, ...current.filter((entry) => entry !== note)].slice(0, 4));
-  }
-
-  async function playGroqAudioChunks(chunks: string[], mimeType: string) {
-    for (const chunk of chunks) {
-      const byteCharacters = atob(chunk);
-      const bytes = new Uint8Array(byteCharacters.length);
-
-      for (let index = 0; index < byteCharacters.length; index += 1) {
-        bytes[index] = byteCharacters.charCodeAt(index);
-      }
-
-      const blob = new Blob([bytes], { type: mimeType });
-      const url = URL.createObjectURL(blob);
-      const audio = new Audio(url);
-      audio.muted = isMutedRef.current;
-      activeAudioRef.current = audio;
-
-      try {
-        await audio.play();
-        await new Promise<void>((resolve) => {
-          audio.addEventListener("ended", () => resolve(), { once: true });
-          audio.addEventListener("error", () => resolve(), { once: true });
-        });
-      } finally {
-        URL.revokeObjectURL(url);
-      }
+  function stopSession() {
+    if (wsRef.current) {
+      wsRef.current.close();
+      wsRef.current = null;
     }
 
-    activeAudioRef.current = null;
-  }
-
-  function speakWithBrowser(text: string, target: string) {
-    if (!text.trim() || isMutedRef.current) {
-      return;
+    if (processorRef.current) {
+      processorRef.current.disconnect();
+      processorRef.current = null;
     }
 
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = target === "ar" ? "ar-SA" : `${target}-${target.toUpperCase()}`;
-
-    const voices = window.speechSynthesis.getVoices();
-    const preferredVoice =
-      voices.find((voiceOption) => voiceOption.lang.toLowerCase().startsWith(utterance.lang.toLowerCase().slice(0, 2))) ??
-      voices.find((voiceOption) => voiceOption.lang.toLowerCase().startsWith(target.toLowerCase()));
-
-    if (preferredVoice) {
-      utterance.voice = preferredVoice;
+    if (inputSourceRef.current) {
+      inputSourceRef.current.disconnect();
+      inputSourceRef.current = null;
     }
 
-    window.speechSynthesis.speak(utterance);
-  }
-
-  function cleanupRecorderGraph() {
-    const refs = recorderRefs.current;
-
-    if (refs.animationFrame !== null) {
-      cancelAnimationFrame(refs.animationFrame);
-      refs.animationFrame = null;
+    if (audioContextRef.current) {
+      void audioContextRef.current.close();
+      audioContextRef.current = null;
     }
 
-    if (refs.recorder && refs.recorder.state !== "inactive") {
-      refs.recorder.stop();
+    if (micStreamRef.current) {
+      micStreamRef.current.getTracks().forEach((track) => track.stop());
+      micStreamRef.current = null;
     }
 
-    refs.recorder = null;
-    refs.recorderStopResolver = null;
-    refs.chunks = [];
-    refs.isSpeaking = false;
-    refs.speechStartedAt = 0;
-    refs.lastSpeechAt = 0;
-    refs.currentTurnStartedAt = 0;
-    refs.isSubmitting = false;
-
-    refs.sourceNode?.disconnect();
-    refs.sourceNode = null;
-    refs.analyser?.disconnect();
-    refs.analyser = null;
-
-    if (refs.audioContext) {
-      void refs.audioContext.close();
-      refs.audioContext = null;
-    }
-  }
-
-  function stopSession({ keepStatus = false }: { keepStatus?: boolean } = {}) {
-    cleanupRecorderGraph();
-
-    micStreamRef.current?.getTracks().forEach((track) => track.stop());
-    micStreamRef.current = null;
-
-    activeAudioRef.current?.pause();
-    activeAudioRef.current = null;
-    window.speechSynthesis.cancel();
-
-    setIsCapturingTurn(false);
-    setIsProcessingTurn(false);
-    setSessionInfo({ sessionId: null, expiresAt: null });
-
-    if (!keepStatus) {
-      setStatus("idle");
-      setStatusMessage("설정을 조정하거나 다시 연결하여 서비스를 시작하세요.");
-      setErrorMessage(null);
-      setSourceTranscriptError(null);
-      setTranslatedOutputError(null);
-      setSessionNotes([]);
-      setSourceTurns([]);
-      setOutputTurns([]);
-    }
-  }
-
-  function failSession(message: string) {
-    stopSession({ keepStatus: true });
-    setStatus("error");
-    setErrorMessage(message);
-    setStatusMessage(
-      "세션을 계속할 수 없습니다. 설정을 확인하거나 다시 연결해 주세요.",
-    );
-  }
-
-  async function submitTurn(blob: Blob) {
-    const refs = recorderRefs.current;
-
-    if (refs.isSubmitting || !blob.size) {
-      return;
-    }
-
-    refs.isSubmitting = true;
-    setIsProcessingTurn(true);
-    setSourceTranscriptError(null);
-    setTranslatedOutputError(null);
-
-    try {
-      const formData = new FormData();
-      const extension = blob.type.includes("mp4") ? "m4a" : blob.type.includes("ogg") ? "ogg" : "webm";
-      formData.append("audio", new File([blob], `turn.${extension}`, { type: blob.type || "audio/webm" }));
-
-      const response = await fetch(
-        buildTurnUrl({
-          source: sourceLanguage,
-          target: targetLanguage,
-          mode,
-          voice,
-        }),
-        {
-          method: "POST",
-          body: formData,
-        },
-      );
-
-      const body = (await response.json()) as TurnResponse | Record<string, unknown>;
-
-      if (!response.ok) {
-        throw new Error(readErrorMessage(body, "음성 처리 도중 오류가 발생했습니다."));
-      }
-
-      const turn = body as TurnResponse;
-      if (!turn.transcript.trim()) {
-        appendSessionNote("음성이 감지되었으나 인식된 텍스트가 없습니다.");
-        return;
-      }
-
-      const turnId = crypto.randomUUID();
-      setSourceTurns((current) => [
-        ...current,
-        {
-          id: turnId,
-          text: turn.transcript,
-          confidence: turn.confidence,
-        },
-      ]);
-
-      if (turn.translation.trim()) {
-        setOutputTurns((current) => [
-          ...current,
-          {
-            id: turnId,
-            text: turn.translation,
-          },
-        ]);
-      }
-
-      if (turn.note) {
-        appendSessionNote(turn.note);
-      }
-
-      if (mode === "interpret" && turn.translation.trim()) {
-        if (turn.speechProvider === "groq" && turn.audioChunks.length > 0 && turn.audioMimeType) {
-          await playGroqAudioChunks(turn.audioChunks, turn.audioMimeType);
-        } else if (turn.speechProvider === "browser") {
-          speakWithBrowser(turn.translation, targetLanguage);
-        }
-      }
-    } catch (error) {
-      const message =
-        error instanceof Error ? error.message : "음성 처리 도중 오류가 발생했습니다.";
-      setTranslatedOutputError(message);
-      setSourceTranscriptError(message);
-      appendSessionNote(`오류 발생: ${message}`);
-    } finally {
-      refs.isSubmitting = false;
-      setIsProcessingTurn(false);
-    }
-  }
-
-  function beginRecorder(stream: MediaStream) {
-    const refs = recorderRefs.current;
-
-    if (refs.recorder && refs.recorder.state !== "inactive") {
-      return;
-    }
-
-    const mimeType = pickMimeType();
-    const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
-    refs.chunks = [];
-    refs.currentTurnStartedAt = performance.now();
-
-    recorder.addEventListener("dataavailable", (event) => {
-      if (event.data.size > 0) {
-        refs.chunks.push(event.data);
-      }
-    });
-
-    recorder.addEventListener("stop", () => {
-      const blob = new Blob(refs.chunks, { type: recorder.mimeType || mimeType || "audio/webm" });
-      refs.recorder = null;
-      refs.chunks = [];
-      setIsCapturingTurn(false);
-      void submitTurn(blob);
-      refs.recorderStopResolver?.();
-      refs.recorderStopResolver = null;
-    });
-
-    recorder.start();
-    refs.recorder = recorder;
-    setIsCapturingTurn(true);
-  }
-
-  function stopRecorder() {
-    const refs = recorderRefs.current;
-
-    if (!refs.recorder || refs.recorder.state === "inactive") {
-      return Promise.resolve();
-    }
-
-    return new Promise<void>((resolve) => {
-      refs.recorderStopResolver = resolve;
-      refs.recorder?.stop();
-    });
-  }
-
-  function startVoiceActivityLoop(stream: MediaStream) {
-    const refs = recorderRefs.current;
-    const audioContext = new AudioContext();
-    const analyser = audioContext.createAnalyser();
-    analyser.fftSize = FFT_SIZE;
-    const sourceNode = audioContext.createMediaStreamSource(stream);
-    sourceNode.connect(analyser);
-
-    refs.audioContext = audioContext;
-    refs.analyser = analyser;
-    refs.sourceNode = sourceNode;
-
-    const buffer = new Float32Array(analyser.fftSize);
-
-    const tick = () => {
-      if (!refs.analyser) {
-        return;
-      }
-
-      refs.analyser.getFloatTimeDomainData(buffer);
-      const rms = calculateRms(buffer);
-      const now = performance.now();
-
-      if (rms >= SPEECH_THRESHOLD && !refs.isSubmitting) {
-        refs.lastSpeechAt = now;
-
-        if (!refs.isSpeaking) {
-          refs.isSpeaking = true;
-          refs.speechStartedAt = now;
-          beginRecorder(stream);
-        }
-      }
-
-      if (refs.isSpeaking && now - refs.lastSpeechAt >= SILENCE_MS) {
-        refs.isSpeaking = false;
-
-        if (refs.currentTurnStartedAt && now - refs.speechStartedAt >= MIN_SPEECH_MS) {
-          void stopRecorder();
-        }
-      }
-
-      refs.animationFrame = requestAnimationFrame(tick);
-    };
-
-    refs.animationFrame = requestAnimationFrame(tick);
+    setStatus("idle");
+    setIsCapturing(false);
   }
 
   async function startSession() {
-    if (status === "connecting" || status === "connected") {
-      return;
-    }
+    if (status !== "idle") return;
 
     setStatus("connecting");
-    setStatusMessage("마이크 권한을 확인하고 음성 감지 엔진을 준비 중입니다.");
-    setErrorMessage(null);
-    setSourceTranscriptError(null);
-    setTranslatedOutputError(null);
-    setSessionNotes([]);
-    setSourceTurns([]);
-    setOutputTurns([]);
-    setIsCapturingTurn(false);
-    setIsProcessingTurn(false);
+    setStatusMessage("세션 토큰을 생성하고 서버에 연결 중입니다...");
 
     try {
-      if (typeof MediaRecorder === "undefined") {
-        throw new Error("이 브라우저는 오디오 캡처 기능을 지원하지 않습니다.");
-      }
+      const sessionRes = await fetch("/api/realtime/session", { method: "POST" });
+      if (!sessionRes.ok) throw new Error("세션 생성에 실패했습니다.");
+      const sessionData = await sessionRes.json();
+      const clientSecret = sessionData.client_secret?.value;
 
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-          channelCount: 1,
-        },
-      });
+      if (!clientSecret) throw new Error("유효한 세션 토큰을 받지 못했습니다.");
 
-      micStreamRef.current = stream;
-      setHasMicPermission(true);
-      setSessionInfo({
-        sessionId: createSessionId(),
-        expiresAt: null,
-      });
+      const ws = new WebSocket(`wss://api.x.ai/v1/realtime?model=${REALTIME_MODEL}`);
+      wsRef.current = ws;
 
-      startVoiceActivityLoop(stream);
+      ws.onopen = () => {
+        setStatus("connected");
+        setStatusMessage("연결되었습니다. 말씀을 시작하세요.");
 
-      appendSessionNote(`마이크 연결 성공. ${targetLabel} 번역 서비스를 시작합니다.`);
-      if (mode === "interpret" && !supportsGroqSpeech(targetLanguage)) {
-        appendSessionNote("현재 언어는 브라우저 음성 엔진을 사용하여 출력됩니다.");
-      }
+        // Initial configuration
+        const sessionUpdate = {
+          type: "session.update",
+          session: {
+            modalities: ["audio", "text"],
+            instructions: buildTranslationInstructions(sourceLanguage, targetLanguage),
+            voice: voice,
+            input_audio_format: "pcm16",
+            output_audio_format: "pcm16",
+            input_audio_transcription: { model: "whisper-1" },
+            turn_detection: { type: "server_vad" },
+          },
+        };
+        ws.send(JSON.stringify(sessionUpdate));
 
-      setStatus("connected");
-      setStatusMessage(
-        mode === "interpret"
-          ? `실시간 통역이 활성화되었습니다. ${targetLabel}로 음성 출력이 제공됩니다.`
-          : `실시간 번역이 활성화되었습니다. 인식된 음성이 ${targetLabel}로 번역됩니다.`,
-      );
-    } catch (error) {
-      stopSession({ keepStatus: true });
+        startAudioCapture();
+      };
+
+      ws.onmessage = async (event) => {
+        const data = JSON.parse(event.data);
+
+        switch (data.type) {
+          case "response.audio_transcription.done":
+            setSourceTurns((prev) => [
+              ...prev,
+              { id: data.item_id, text: data.transcript },
+            ]);
+            break;
+          case "response.audio.done":
+            // Handle audio playback if needed synchronously, 
+            // but usually chunks come in response.audio.delta
+            break;
+          case "response.audio.delta":
+            playOutputAudioChunk(data.delta);
+            break;
+          case "response.text.done":
+            setOutputTurns((prev) => [
+              ...prev,
+              { id: data.item_id, text: data.text },
+            ]);
+            break;
+          case "error":
+            console.error("WS Error:", data.error);
+            setErrorMessage(data.error.message);
+            break;
+        }
+      };
+
+      ws.onclose = () => stopSession();
+      ws.onerror = () => {
+        setStatus("error");
+        setErrorMessage("연결 오류가 발생했습니다.");
+      };
+
+    } catch (err) {
       setStatus("error");
-      setErrorMessage(error instanceof Error ? error.message : "세션을 시작할 수 없습니다.");
-      setStatusMessage("세션 시작에 실패했습니다. 설정을 확인 후 다시 시도해 주세요.");
+      setErrorMessage(err instanceof Error ? err.message : "알 수 없는 오류");
     }
+  }
+
+  async function startAudioCapture() {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      micStreamRef.current = stream;
+
+      const audioContext = new AudioContext({ sampleRate: 24000 });
+      audioContextRef.current = audioContext;
+
+      const source = audioContext.createMediaStreamSource(stream);
+      inputSourceRef.current = source;
+
+      const processor = audioContext.createScriptProcessor(4096, 1, 1);
+      processorRef.current = processor;
+
+      processor.onaudioprocess = (e) => {
+        if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+
+        const inputData = e.inputBuffer.getChannelData(0);
+        // Convert Float32 to Int16
+        const pcm16 = new Int16Array(inputData.length);
+        for (let i = 0; i < inputData.length; i++) {
+          pcm16[i] = Math.max(-1, Math.min(1, inputData[i])) * 0x7fff;
+        }
+
+        const base64Audio = btoa(
+          String.fromCharCode(...new Uint8Array(pcm16.buffer))
+        );
+
+        wsRef.current.send(JSON.stringify({
+          type: "input_audio_buffer.append",
+          audio: base64Audio
+        }));
+      };
+
+      source.connect(processor);
+      processor.connect(audioContext.destination);
+      setIsCapturing(true);
+
+    } catch (err) {
+      console.error("Mic error:", err);
+      setErrorMessage("마이크 접근에 실패했습니다.");
+    }
+  }
+
+  // Very basic audio player for PCM chunks
+  const audioStack: AudioBuffer[] = [];
+  let isPlaying = false;
+
+  async function playOutputAudioChunk(base64: string) {
+    if (!audioContextRef.current) return;
+
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    
+    const pcm16 = new Int16Array(bytes.buffer);
+    const float32 = new Float32Array(pcm16.length);
+    for (let i = 0; i < pcm16.length; i++) float32[i] = pcm16[i] / 0x7fff;
+
+    const buffer = audioContextRef.current.createBuffer(1, float32.length, 24000);
+    buffer.getChannelData(0).set(float32);
+    
+    const source = audioContextRef.current.createBufferSource();
+    source.buffer = buffer;
+    source.connect(audioContextRef.current.destination);
+    source.start();
   }
 
   return (
@@ -581,7 +239,7 @@ export function InterpreterApp() {
 
       <section className="rt-hero wv-hero">
         <h1>동통사</h1>
-        <p>실시간 인공지능 동시 통역사</p>
+        <p>실시간 인공지능 동시 통역사 (xAI Powered)</p>
       </section>
 
       <section className="rt-workspace wv-workspace">
@@ -591,7 +249,7 @@ export function InterpreterApp() {
             <p>언어 및 동작 모드를 선택하고 연결을 시작하세요.</p>
           </div>
 
-          <div className="rt-mode-toggle" role="tablist" aria-label="Mode">
+          <div className="rt-mode-toggle">
             <button
               type="button"
               className={mode === "translate" ? "rt-mode-button rt-mode-button-active" : "rt-mode-button"}
@@ -610,61 +268,32 @@ export function InterpreterApp() {
             </button>
           </div>
 
-          <div className="rt-pill-group">
-            <span className={`rt-pill rt-pill-status rt-pill-${status}`}>상태: {statusLabel(status)}</span>
-            <span className="rt-pill">
-              {hasMicPermission ? "마이크 연결됨" : "마이크 대기 중"}
-            </span>
-          </div>
-
           <div className="rt-control-stack">
             <label className="rt-field">
-              <span>도착 언어 (번역될 언어)</span>
+              <span>목표 언어</span>
               <select
                 value={targetLanguage}
-                onChange={(event) => setTargetLanguage(event.target.value)}
+                onChange={(e) => setTargetLanguage(e.target.value)}
                 disabled={controlsLocked}
               >
-                {LANGUAGE_OPTIONS.map((language) => (
-                  <option key={language.code} value={language.code}>
-                    {language.label}
-                  </option>
+                {LANGUAGE_OPTIONS.map((lang) => (
+                  <option key={lang.code} value={lang.code}>{lang.label}</option>
                 ))}
               </select>
             </label>
 
-            <div className="rt-inline-fields">
-              <label className="rt-field">
-                <span>출발 언어</span>
-                <select
-                  value={sourceLanguage}
-                  onChange={(event) => setSourceLanguage(event.target.value)}
-                  disabled={controlsLocked}
-                >
-                  <option value={SOURCE_AUTO}>자동 감지</option>
-                  {LANGUAGE_OPTIONS.map((language) => (
-                    <option key={language.code} value={language.code}>
-                      {language.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              <label className="rt-field">
-                <span>음성 선택</span>
-                <select
-                  value={voice}
-                  onChange={(event) => setVoice(event.target.value as RealtimeVoice)}
-                  disabled={controlsLocked || mode !== "interpret"}
-                >
-                  {REALTIME_VOICES.map((option) => (
-                    <option key={option} value={option}>
-                      {option}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </div>
+            <label className="rt-field">
+              <span>음성</span>
+              <select
+                value={voice}
+                onChange={(e) => setVoice(e.target.value as RealtimeVoice)}
+                disabled={controlsLocked}
+              >
+                {REALTIME_VOICES.map((v) => (
+                  <option key={v} value={v}>{v}</option>
+                ))}
+              </select>
+            </label>
           </div>
 
           <div className="rt-actions">
@@ -679,112 +308,43 @@ export function InterpreterApp() {
             <button
               type="button"
               className="rt-button rt-button-secondary"
-              onClick={() => stopSession()}
+              onClick={stopSession}
               disabled={!controlsLocked}
             >
               종료
             </button>
           </div>
 
-          <div className="rt-actions rt-actions-compact">
-            <button
-              type="button"
-              className="rt-button rt-button-tertiary"
-              onClick={() => setIsMuted((current) => !current)}
-              disabled={audioControlsDisabled}
-            >
-              {isMuted ? "음성 출력 켜기" : "음성 출력 끄기"}
-            </button>
-          </div>
-
-          <dl className="rt-meta-list">
-            <div>
-              <dt>현재 목표 언어</dt>
-              <dd>{targetLabel}</dd>
-            </div>
-            <div>
-              <dt>음성 출력 방식</dt>
-              <dd>{mode === "interpret" ? targetSpeechLabel : "텍스트 전용"}</dd>
-            </div>
-            <div>
-              <dt>세션 ID</dt>
-              <dd>{sessionInfo.sessionId ?? "준비 중"}</dd>
-            </div>
-          </dl>
-
           <div className="rt-status-copy">
             <p>{statusMessage}</p>
-            {errorMessage ? <p className="rt-error-copy">{errorMessage}</p> : null}
-            {sessionNotes.length > 0 ? (
-              <ul className="rt-notes">
-                {sessionNotes.map((note) => (
-                  <li key={note}>{note}</li>
-                ))}
-              </ul>
-            ) : null}
+            {errorMessage && <p className="rt-error-copy">{errorMessage}</p>}
           </div>
         </aside>
 
         <section className="rt-card rt-surface-card wv-card">
           <div className="rt-card-heading">
             <h2>실시간 대화 내역</h2>
-            <p>인식된 음성과 번역된 결과가 실시간으로 표시됩니다.</p>
           </div>
 
           <div className="rt-surface-grid wv-surface-grid">
             <article className="rt-surface-pane">
-              <header>
-                <h3>인식된 음성</h3>
-              </header>
+              <header><h3>인식된 음성</h3></header>
               <div className="rt-scrollbox">
-                {sourceTurns.length > 0 ? (
-                  sourceTurns.map((turn) => (
-                    <div key={turn.id} className="rt-turn rt-turn-final">
-                      <p>{turn.text}</p>
-                      {turn.confidence !== null ? (
-                        <span className="rt-confidence">{formatConfidence(turn.confidence)}</span>
-                      ) : null}
-                    </div>
-                  ))
-                ) : sourceTranscriptError ? (
-                  <p className="rt-empty-copy rt-empty-copy-error">{sourceTranscriptError}</p>
-                ) : isCapturingTurn ? (
-                  <div className="rt-turn rt-turn-live">
-                    <p>말씀하시는 중입니다...</p>
-                  </div>
-                ) : isProcessingTurn ? (
-                  <div className="rt-turn rt-turn-live">
-                    <p>번역 처리 중입니다...</p>
-                  </div>
-                ) : (
-                  <p className="rt-empty-copy">
-                    서비스가 시작되면 여기에 인식된 텍스트가 표시됩니다.
-                  </p>
+                {sourceTurns.map((turn) => (
+                  <div key={turn.id} className="rt-turn rt-turn-final"><p>{turn.text}</p></div>
+                ))}
+                {isCapturing && (
+                  <div className="rt-turn rt-turn-live"><p>말씀하시는 중...</p></div>
                 )}
               </div>
             </article>
 
             <article className="rt-surface-pane">
-              <header>
-                <h3>번역 결과</h3>
-              </header>
+              <header><h3>번역 결과</h3></header>
               <div className="rt-scrollbox">
-                {outputTurns.length > 0 ? (
-                  outputTurns.map((turn) => (
-                    <div
-                      key={turn.id}
-                      className={mode === "interpret" ? "rt-turn rt-turn-audio-final" : "rt-turn rt-turn-final"}
-                    >
-                      <p>{turn.text}</p>
-                    </div>
-                  ))
-                ) : translatedOutputError ? (
-                  <p className="rt-empty-copy rt-empty-copy-error">{translatedOutputError}</p>
-                ) : (
-                  <p className="rt-empty-copy">
-                    여기에 번역된 결과가 표시됩니다.
-                  </p>
-                )}
+                {outputTurns.map((turn) => (
+                  <div key={turn.id} className="rt-turn rt-turn-audio-final"><p>{turn.text}</p></div>
+                ))}
               </div>
             </article>
           </div>
