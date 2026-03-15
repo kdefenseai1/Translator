@@ -147,7 +147,7 @@ export function InterpreterApp() {
                 { id: data.item_id, text: data.transcript },
               ]);
               break;
-            case "response.audio_transcript.delta":
+            case "response.output_audio_transcript.delta":
               // Live translation text delta
               setOutputTurns((prev) => {
                 const last = prev[prev.length - 1];
@@ -159,10 +159,10 @@ export function InterpreterApp() {
                 return [...prev, { id: data.item_id, text: data.delta }];
               });
               break;
-            case "response.audio_transcript.done":
+            case "response.output_audio_transcript.done":
               console.log("Translation finished:", data.transcript);
               break;
-            case "response.audio.delta":
+            case "response.output_audio.delta":
               playOutputAudioChunk(data.delta);
               break;
             case "error":
