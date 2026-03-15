@@ -136,35 +136,45 @@ export function InterpreterApp() {
       };
 
       ws.onmessage = async (event) => {
-        const data = JSON.parse(event.data);
+        try {
+          const data = JSON.parse(event.data);
+          console.log("WS Server Event:", data.type, data);
 
-        switch (data.type) {
-          case "conversation.item.input_audio_transcription.completed":
-            setSourceTurns((prev) => [
-              ...prev,
-              { id: data.item_id, text: data.transcript },
-            ]);
-            break;
-          case "response.audio_transcript.delta":
-            // Live translation text delta
-            setOutputTurns((prev) => {
-              const last = prev[prev.length - 1];
-              if (last && last.id === data.item_id) {
-                return [...prev.slice(0, -1), { ...last, text: last.text + data.delta }];
-              }
-              return [...prev, { id: data.item_id, text: data.delta }];
-            });
-            break;
-          case "response.audio_transcript.done":
-            // Finalized translation text
-            break;
-          case "response.audio.delta":
-            playOutputAudioChunk(data.delta);
-            break;
-          case "error":
-            console.error("WS Error:", data.error);
-            setErrorMessage(data.error.message || "서버 오류가 발생했습니다.");
-            break;
+          switch (data.type) {
+            case "conversation.item.input_audio_transcription.completed":
+              setSourceTurns((prev) => [
+                ...prev,
+                { id: data.item_id, text: data.transcript },
+              ]);
+              break;
+            case "response.audio_transcript.delta":
+              // Live translation text delta
+              setOutputTurns((prev) => {
+                const last = prev[prev.length - 1];
+                if (last && last.id === data.item_id) {
+                  const updated = [...prev];
+                  updated[updated.length - 1] = { ...last, text: last.text + data.delta };
+                  return updated;
+                }
+                return [...prev, { id: data.item_id, text: data.delta }];
+              });
+              break;
+            case "response.audio_transcript.done":
+              console.log("Translation finished:", data.transcript);
+              break;
+            case "response.audio.delta":
+              playOutputAudioChunk(data.delta);
+              break;
+            case "error":
+              console.error("WS Server Error Info:", data.error);
+              setErrorMessage(data.error.message || "서버 오류가 발생했습니다.");
+              break;
+            default:
+              // Log other events like session.created, conversation.created etc.
+              break;
+          }
+        } catch (e) {
+          console.error("Error parsing WS message:", e);
         }
       };
 
