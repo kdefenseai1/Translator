@@ -45,6 +45,7 @@ export function InterpreterApp() {
   const [outputTurns, setOutputTurns] = useState<OutputTurn[]>([]);
   const [isCapturing, setIsCapturing] = useState(false);
   const [interpretationMode, setInterpretationMode] = useState<"realtime" | "sequential">("realtime");
+  const [isSpeaking, setIsSpeaking] = useState(false);
 
   const controlsLocked = status === "connecting" || status === "connected";
 
@@ -206,6 +207,9 @@ export function InterpreterApp() {
 
       processor.onaudioprocess = (e) => {
         if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+        
+        // In sequential mode, only append when actively speaking
+        if (interpretationMode === "sequential" && !isSpeaking) return;
 
         const inputData = e.inputBuffer.getChannelData(0);
         // Convert Float32 to Int16
@@ -233,13 +237,21 @@ export function InterpreterApp() {
       setErrorMessage("마이크 접근에 실패했습니다.");
     }
   }
+  function startSpeaking() {
+    setIsSpeaking(true);
+    setStatusMessage("말씀하세요...");
+  }
+
   function commitAudio() {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
     
+    // Stop appending immediately
+    setIsSpeaking(false);
+
     // Manual commit for sequential mode to trigger response
     wsRef.current.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
     wsRef.current.send(JSON.stringify({ type: "response.create" }));
-    setStatusMessage("처리 중입니다...");
+    setStatusMessage("통역 중입니다...");
   }
 
   // Very basic audio player for PCM chunks
@@ -361,13 +373,23 @@ export function InterpreterApp() {
                 서비스 시작하기
               </button>
             ) : status === "connected" && interpretationMode === "sequential" ? (
-              <button
-                type="button"
-                className="rt-button rt-button-primary rt-button-commit"
-                onClick={commitAudio}
-              >
-                말씀 완료 (통역)
-              </button>
+              !isSpeaking ? (
+                <button
+                  type="button"
+                  className="rt-button rt-button-primary"
+                  onClick={startSpeaking}
+                >
+                  말씀 시작하기
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="rt-button rt-button-primary rt-button-commit"
+                  onClick={commitAudio}
+                >
+                  말씀 완료 (통역)
+                </button>
+              )
             ) : (
               <button
                 type="button"
