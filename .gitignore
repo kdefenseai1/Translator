@@ -1,0 +1,10 @@
+.next
+node_modules
+.DS_Store
+.env.local
+coverage
+*.log
+.venv-libretranslate
+.lt-data
+.lt-config
+.lt-cache
