@@ -138,28 +138,31 @@ export function InterpreterApp() {
         const data = JSON.parse(event.data);
 
         switch (data.type) {
-          case "response.audio_transcription.done":
+          case "conversation.item.input_audio_transcription.completed":
             setSourceTurns((prev) => [
               ...prev,
               { id: data.item_id, text: data.transcript },
             ]);
             break;
-          case "response.audio.done":
-            // Handle audio playback if needed synchronously, 
-            // but usually chunks come in response.audio.delta
+          case "response.audio_transcript.delta":
+            // Live translation text delta
+            setOutputTurns((prev) => {
+              const last = prev[prev.length - 1];
+              if (last && last.id === data.item_id) {
+                return [...prev.slice(0, -1), { ...last, text: last.text + data.delta }];
+              }
+              return [...prev, { id: data.item_id, text: data.delta }];
+            });
+            break;
+          case "response.audio_transcript.done":
+            // Finalized translation text
             break;
           case "response.audio.delta":
             playOutputAudioChunk(data.delta);
             break;
-          case "response.text.done":
-            setOutputTurns((prev) => [
-              ...prev,
-              { id: data.item_id, text: data.text },
-            ]);
-            break;
           case "error":
             console.error("WS Error:", data.error);
-            setErrorMessage(data.error.message);
+            setErrorMessage(data.error.message || "서버 오류가 발생했습니다.");
             break;
         }
       };
