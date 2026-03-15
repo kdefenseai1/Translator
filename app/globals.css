@@ -441,6 +441,62 @@ code {
   margin: 0;
 }
 
+/* WebView App Styles */
+.wv-style {
+  background: #0d161d;
+  display: flex;
+  flex-direction: column;
+  padding: 12px !important;
+  max-width: 600px;
+  margin: 0 auto;
+}
+
+.wv-hero {
+  text-align: center;
+  padding: 24px 0 12px;
+}
+
+.wv-hero h1 {
+  font-size: 2.2rem;
+  background: linear-gradient(135deg, #ff9e5d, #ffa769);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  margin-bottom: 4px;
+}
+
+.wv-hero p {
+  font-size: 0.9rem;
+  margin: 0;
+  opacity: 0.8;
+}
+
+.wv-workspace {
+  grid-template-columns: 1fr !important;
+  margin-top: 12px !important;
+  gap: 12px !important;
+}
+
+.wv-card {
+  border-radius: 16px !important;
+  border: 1px solid rgba(255, 255, 255, 0.08) !important;
+}
+
+.wv-surface-grid {
+  grid-template-columns: 1fr !important;
+}
+
+.rt-scrollbox {
+  min-height: 200px !important;
+  max-height: 250px !important;
+}
+
+@media (min-width: 1080px) {
+  .wv-style {
+    max-width: 800px;
+  }
+}
+
 @media (max-width: 1080px) {
   .rt-workspace {
     grid-template-columns: 1fr;

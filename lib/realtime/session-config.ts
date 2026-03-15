@@ -104,5 +104,5 @@ export function describeSpeechProvider(target: string) {
     return "Groq TTS";
   }
 
-  return "Browser speech fallback";
+  return "브라우저 음성 (기본)";
 }

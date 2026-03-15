@@ -10,8 +10,8 @@ const bodyFont = Manrope({
 });
 
 export const metadata: Metadata = {
-  title: "Live Translate",
-  description: "Turn-based speech translation and interpretation powered by Groq.",
+  title: "동통사",
+  description: "Groq 기반의 실시간 음성 번역 및 통역 서비스",
 };
 
 export default function RootLayout({

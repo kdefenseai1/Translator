@@ -69,13 +69,13 @@ function buildTurnUrl(params: Record<string, string>) {
 function statusLabel(status: ConnectionStatus) {
   switch (status) {
     case "connecting":
-      return "Connecting";
+      return "연결 중";
     case "connected":
-      return "Live";
+      return "연결됨";
     case "error":
-      return "Issue";
+      return "오류";
     default:
-      return "Ready to start";
+      return "대기 중";
   }
 }
 
@@ -84,15 +84,15 @@ function formatConfidence(confidence: number | null | undefined) {
     return null;
   }
 
-  return `${Math.round(confidence * 100)}% confidence`;
+  return `신뢰도 ${Math.round(confidence * 100)}%`;
 }
 
 function formatSessionExpiry(expiresAt: number | null) {
   if (!expiresAt) {
-    return "Active while connected";
+    return "연결 유지 중";
   }
 
-  return new Intl.DateTimeFormat("en-US", {
+  return new Intl.DateTimeFormat("ko-KR", {
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit",
@@ -150,7 +150,7 @@ function readErrorMessage(body: unknown, fallback: string) {
 }
 
 function createSessionId() {
-  return `groq-${crypto.randomUUID()}`;
+  return `dongtongsa-${crypto.randomUUID().slice(0, 8)}`;
 }
 
 export function InterpreterApp() {
@@ -178,7 +178,7 @@ export function InterpreterApp() {
   const [voice, setVoice] = useState<RealtimeVoice>(REALTIME_VOICES[0]);
   const [status, setStatus] = useState<ConnectionStatus>("idle");
   const [statusMessage, setStatusMessage] = useState(
-    "The browser captures microphone turns locally, then sends each completed turn to Groq for transcription and translation.",
+    "브라우저에서 마이크로 음성을 획득하여 Groq API를 통해 실시간으로 번역하고 전달합니다.",
   );
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [sourceTranscriptError, setSourceTranscriptError] = useState<string | null>(null);
@@ -319,7 +319,7 @@ export function InterpreterApp() {
 
     if (!keepStatus) {
       setStatus("idle");
-      setStatusMessage("Change the target language or mode to reconnect cleanly.");
+      setStatusMessage("설정을 조정하거나 다시 연결하여 서비스를 시작하세요.");
       setErrorMessage(null);
       setSourceTranscriptError(null);
       setTranslatedOutputError(null);
@@ -334,7 +334,7 @@ export function InterpreterApp() {
     setStatus("error");
     setErrorMessage(message);
     setStatusMessage(
-      "The live session could not continue. Retry after adjusting the target language or reconnecting.",
+      "세션을 계속할 수 없습니다. 설정을 확인하거나 다시 연결해 주세요.",
     );
   }
 
@@ -371,12 +371,12 @@ export function InterpreterApp() {
       const body = (await response.json()) as TurnResponse | Record<string, unknown>;
 
       if (!response.ok) {
-        throw new Error(readErrorMessage(body, "Groq could not process the captured speech turn."));
+        throw new Error(readErrorMessage(body, "음성 처리 도중 오류가 발생했습니다."));
       }
 
       const turn = body as TurnResponse;
       if (!turn.transcript.trim()) {
-        appendSessionNote("Captured a turn, but Groq returned no transcript text.");
+        appendSessionNote("음성이 감지되었으나 인식된 텍스트가 없습니다.");
         return;
       }
 
@@ -413,10 +413,10 @@ export function InterpreterApp() {
       }
     } catch (error) {
       const message =
-        error instanceof Error ? error.message : "Groq could not process the captured speech turn.";
+        error instanceof Error ? error.message : "음성 처리 도중 오류가 발생했습니다.";
       setTranslatedOutputError(message);
       setSourceTranscriptError(message);
-      appendSessionNote(`Turn failed: ${message}`);
+      appendSessionNote(`오류 발생: ${message}`);
     } finally {
       refs.isSubmitting = false;
       setIsProcessingTurn(false);
@@ -522,7 +522,7 @@ export function InterpreterApp() {
     }
 
     setStatus("connecting");
-    setStatusMessage("Requesting microphone access and arming the local turn detector.");
+    setStatusMessage("마이크 권한을 확인하고 음성 감지 엔진을 준비 중입니다.");
     setErrorMessage(null);
     setSourceTranscriptError(null);
     setTranslatedOutputError(null);
@@ -534,7 +534,7 @@ export function InterpreterApp() {
 
     try {
       if (typeof MediaRecorder === "undefined") {
-        throw new Error("This browser does not support MediaRecorder audio capture.");
+        throw new Error("이 브라우저는 오디오 캡처 기능을 지원하지 않습니다.");
       }
 
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -555,46 +555,40 @@ export function InterpreterApp() {
 
       startVoiceActivityLoop(stream);
 
-      appendSessionNote(`Microphone granted. Listening for turns headed toward ${targetLabel}.`);
+      appendSessionNote(`마이크 연결 성공. ${targetLabel} 번역 서비스를 시작합니다.`);
       if (mode === "interpret" && !supportsGroqSpeech(targetLanguage)) {
-        appendSessionNote("Groq TTS is unavailable for this target language, so spoken output will use the browser voice.");
+        appendSessionNote("현재 언어는 브라우저 음성 엔진을 사용하여 출력됩니다.");
       }
 
       setStatus("connected");
       setStatusMessage(
         mode === "interpret"
-          ? `Turn-based translation will stream in ${targetLabel}. Spoken output uses ${targetSpeechLabel}.`
-          : `Turn-based transcript and translated text will stream in ${targetLabel}.`,
+          ? `실시간 통역이 활성화되었습니다. ${targetLabel}로 음성 출력이 제공됩니다.`
+          : `실시간 번역이 활성화되었습니다. 인식된 음성이 ${targetLabel}로 번역됩니다.`,
       );
     } catch (error) {
       stopSession({ keepStatus: true });
       setStatus("error");
-      setErrorMessage(error instanceof Error ? error.message : "The session could not start.");
-      setStatusMessage("The session could not start. Fix the issue and try again.");
+      setErrorMessage(error instanceof Error ? error.message : "세션을 시작할 수 없습니다.");
+      setStatusMessage("세션 시작에 실패했습니다. 설정을 확인 후 다시 시도해 주세요.");
     }
   }
 
   return (
-    <main className="rt-shell">
+    <main className="rt-shell wv-style">
       <div className="rt-noise rt-noise-a" />
       <div className="rt-noise rt-noise-b" />
 
-      <section className="rt-hero">
-        <h1>Live Realtime Translator</h1>
-        <p>
-          Speak in any language, let the browser capture each microphone turn locally, then send it
-          to Groq for speech transcription, translation, and spoken delivery.
-        </p>
+      <section className="rt-hero wv-hero">
+        <h1>동통사</h1>
+        <p>실시간 인공지능 동시 통역사</p>
       </section>
 
-      <section className="rt-workspace">
-        <aside className="rt-card rt-control-card">
+      <section className="rt-workspace wv-workspace">
+        <aside className="rt-card rt-control-card wv-card">
           <div className="rt-card-heading">
-            <h2>Connection Control</h2>
-            <p>
-              The browser arms the microphone, detects completed speaker turns locally, then sends
-              each turn to Groq. Changing the target language reconnects the session cleanly.
-            </p>
+            <h2>설정 제어</h2>
+            <p>언어 및 동작 모드를 선택하고 연결을 시작하세요.</p>
           </div>
 
           <div className="rt-mode-toggle" role="tablist" aria-label="Mode">
@@ -604,7 +598,7 @@ export function InterpreterApp() {
               onClick={() => setMode("translate")}
               disabled={controlsLocked}
             >
-              Translate
+              번역 모드
             </button>
             <button
               type="button"
@@ -612,22 +606,20 @@ export function InterpreterApp() {
               onClick={() => setMode("interpret")}
               disabled={controlsLocked}
             >
-              Interpret
+              통역 모드
             </button>
           </div>
 
           <div className="rt-pill-group">
-            <span className={`rt-pill rt-pill-status rt-pill-${status}`}>Status {statusLabel(status)}</span>
+            <span className={`rt-pill rt-pill-status rt-pill-${status}`}>상태: {statusLabel(status)}</span>
             <span className="rt-pill">
-              Mic {hasMicPermission ? "Microphone granted" : "Waiting for microphone"}
+              {hasMicPermission ? "마이크 연결됨" : "마이크 대기 중"}
             </span>
-            <span className="rt-pill">Translate {REALTIME_MODEL}</span>
-            <span className="rt-pill">Transcript {REALTIME_TRANSCRIBE_MODEL}</span>
           </div>
 
           <div className="rt-control-stack">
             <label className="rt-field">
-              <span>Target language</span>
+              <span>도착 언어 (번역될 언어)</span>
               <select
                 value={targetLanguage}
                 onChange={(event) => setTargetLanguage(event.target.value)}
@@ -635,7 +627,7 @@ export function InterpreterApp() {
               >
                 {LANGUAGE_OPTIONS.map((language) => (
                   <option key={language.code} value={language.code}>
-                    {language.label} - {language.label}
+                    {language.label}
                   </option>
                 ))}
               </select>
@@ -643,13 +635,13 @@ export function InterpreterApp() {
 
             <div className="rt-inline-fields">
               <label className="rt-field">
-                <span>Source</span>
+                <span>출발 언어</span>
                 <select
                   value={sourceLanguage}
                   onChange={(event) => setSourceLanguage(event.target.value)}
                   disabled={controlsLocked}
                 >
-                  <option value={SOURCE_AUTO}>Auto-detect</option>
+                  <option value={SOURCE_AUTO}>자동 감지</option>
                   {LANGUAGE_OPTIONS.map((language) => (
                     <option key={language.code} value={language.code}>
                       {language.label}
@@ -659,7 +651,7 @@ export function InterpreterApp() {
               </label>
 
               <label className="rt-field">
-                <span>Voice</span>
+                <span>음성 선택</span>
                 <select
                   value={voice}
                   onChange={(event) => setVoice(event.target.value as RealtimeVoice)}
@@ -682,7 +674,7 @@ export function InterpreterApp() {
               onClick={startSession}
               disabled={controlsLocked}
             >
-              {status === "connecting" ? "Connecting..." : "Connect session"}
+              {status === "connecting" ? "연결 중..." : "서비스 시작하기"}
             </button>
             <button
               type="button"
@@ -690,7 +682,7 @@ export function InterpreterApp() {
               onClick={() => stopSession()}
               disabled={!controlsLocked}
             >
-              Disconnect
+              종료
             </button>
           </div>
 
@@ -701,26 +693,22 @@ export function InterpreterApp() {
               onClick={() => setIsMuted((current) => !current)}
               disabled={audioControlsDisabled}
             >
-              {isMuted ? "Unmute interpreter" : "Mute interpreter"}
+              {isMuted ? "음성 출력 켜기" : "음성 출력 끄기"}
             </button>
           </div>
 
           <dl className="rt-meta-list">
             <div>
-              <dt>Current target</dt>
+              <dt>현재 목표 언어</dt>
               <dd>{targetLabel}</dd>
             </div>
             <div>
-              <dt>Speech output</dt>
-              <dd>{mode === "interpret" ? targetSpeechLabel : "Text only"}</dd>
+              <dt>음성 출력 방식</dt>
+              <dd>{mode === "interpret" ? targetSpeechLabel : "텍스트 전용"}</dd>
             </div>
             <div>
-              <dt>Session id</dt>
-              <dd>{sessionInfo.sessionId ?? "Pending"}</dd>
-            </div>
-            <div>
-              <dt>Session expires</dt>
-              <dd>{formatSessionExpiry(sessionInfo.expiresAt)}</dd>
+              <dt>세션 ID</dt>
+              <dd>{sessionInfo.sessionId ?? "준비 중"}</dd>
             </div>
           </dl>
 
@@ -737,20 +725,16 @@ export function InterpreterApp() {
           </div>
         </aside>
 
-        <section className="rt-card rt-surface-card">
+        <section className="rt-card rt-surface-card wv-card">
           <div className="rt-card-heading">
-            <h2>Live Transcript Surface</h2>
-            <p>
-              Source turns are captured locally and sent to Groq once the speaker pauses. Groq returns
-              a full transcript and translated response for each completed turn.
-            </p>
+            <h2>실시간 대화 내역</h2>
+            <p>인식된 음성과 번역된 결과가 실시간으로 표시됩니다.</p>
           </div>
 
-          <div className="rt-surface-grid">
+          <div className="rt-surface-grid wv-surface-grid">
             <article className="rt-surface-pane">
               <header>
-                <h3>Speaker transcript</h3>
-                <p>Turn-based transcription with Groq Whisper after each detected speaker pause.</p>
+                <h3>인식된 음성</h3>
               </header>
               <div className="rt-scrollbox">
                 {sourceTurns.length > 0 ? (
@@ -766,15 +750,15 @@ export function InterpreterApp() {
                   <p className="rt-empty-copy rt-empty-copy-error">{sourceTranscriptError}</p>
                 ) : isCapturingTurn ? (
                   <div className="rt-turn rt-turn-live">
-                    <p>Listening to the current speaker turn…</p>
+                    <p>말씀하시는 중입니다...</p>
                   </div>
                 ) : isProcessingTurn ? (
                   <div className="rt-turn rt-turn-live">
-                    <p>Sending the captured turn to Groq for transcription…</p>
+                    <p>번역 처리 중입니다...</p>
                   </div>
                 ) : (
                   <p className="rt-empty-copy">
-                    Speak after connecting to capture one full speaker turn at a time.
+                    서비스가 시작되면 여기에 인식된 텍스트가 표시됩니다.
                   </p>
                 )}
               </div>
@@ -782,12 +766,7 @@ export function InterpreterApp() {
 
             <article className="rt-surface-pane">
               <header>
-                <h3>Translated output</h3>
-                <p>
-                  {mode === "interpret"
-                    ? `Turn translations stream in ${targetLabel}. Spoken output uses ${targetSpeechLabel}.`
-                    : `Translated text lands in ${targetLabel} after each completed speaker turn.`}
-                </p>
+                <h3>번역 결과</h3>
               </header>
               <div className="rt-scrollbox">
                 {outputTurns.length > 0 ? (
@@ -801,27 +780,14 @@ export function InterpreterApp() {
                   ))
                 ) : translatedOutputError ? (
                   <p className="rt-empty-copy rt-empty-copy-error">{translatedOutputError}</p>
-                ) : isProcessingTurn ? (
-                  <div className={mode === "interpret" ? "rt-turn rt-turn-audio-live" : "rt-turn rt-turn-live"}>
-                    <p>Groq is translating the current speaker turn…</p>
-                  </div>
                 ) : (
                   <p className="rt-empty-copy">
-                    {mode === "interpret"
-                      ? "The translated voice and transcript will appear here after each completed speaker turn."
-                      : "The translated text will appear here after each completed speaker turn."}
+                    여기에 번역된 결과가 표시됩니다.
                   </p>
                 )}
               </div>
             </article>
           </div>
-
-          <footer className="rt-surface-footer">
-            <p>The microphone stays armed while the session is connected, but Groq is called only after a pause in speech.</p>
-            <p>
-              Groq TTS currently supports English and Arabic directly. Other spoken targets use the browser voice fallback.
-            </p>
-          </footer>
         </section>
       </section>
     </main>
