@@ -491,6 +491,41 @@ code {
   max-height: 250px !important;
 }
 
+.rt-sub-toggle {
+  display: flex;
+  background: #1a2731;
+  padding: 4px;
+  border-radius: 8px;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.rt-sub-button {
+  flex: 1;
+  background: transparent;
+  border: none;
+  color: #a0aec0;
+  font-size: 0.8rem;
+  padding: 6px 0;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.rt-sub-button-active {
+  background: #2d3748;
+  color: #fff;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+}
+
+.rt-button-commit {
+  background: linear-gradient(135deg, #3182ce, #2c5282) !important;
+}
+
+.rt-button-commit:hover {
+  background: linear-gradient(135deg, #4299e1, #3182ce) !important;
+}
+
 @media (min-width: 1080px) {
   .wv-style {
     max-width: 800px;

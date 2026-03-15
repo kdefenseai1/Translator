@@ -44,6 +44,7 @@ export function InterpreterApp() {
   const [sourceTurns, setSourceTurns] = useState<SourceTurn[]>([]);
   const [outputTurns, setOutputTurns] = useState<OutputTurn[]>([]);
   const [isCapturing, setIsCapturing] = useState(false);
+  const [interpretationMode, setInterpretationMode] = useState<"realtime" | "sequential">("realtime");
 
   const controlsLocked = status === "connecting" || status === "connected";
 
@@ -126,7 +127,7 @@ export function InterpreterApp() {
             input_audio_format: "pcm16",
             output_audio_format: "pcm16",
             input_audio_transcription: { model: "whisper-1" },
-            turn_detection: { type: "server_vad" },
+            turn_detection: interpretationMode === "realtime" ? { type: "server_vad" } : null,
           },
         };
         ws.send(JSON.stringify(sessionUpdate));
@@ -222,6 +223,14 @@ export function InterpreterApp() {
       setErrorMessage("마이크 접근에 실패했습니다.");
     }
   }
+  function commitAudio() {
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+    
+    // Manual commit for sequential mode to trigger response
+    wsRef.current.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
+    wsRef.current.send(JSON.stringify({ type: "response.create" }));
+    setStatusMessage("처리 중입니다...");
+  }
 
   // Very basic audio player for PCM chunks
   const audioStack: AudioBuffer[] = [];
@@ -284,6 +293,27 @@ export function InterpreterApp() {
           </div>
 
           <div className="rt-control-stack">
+            <div className="rt-field">
+              <span>작동 방식</span>
+              <div className="rt-sub-toggle">
+                <button
+                  type="button"
+                  className={interpretationMode === "realtime" ? "rt-sub-button rt-sub-button-active" : "rt-sub-button"}
+                  onClick={() => setInterpretationMode("realtime")}
+                  disabled={controlsLocked}
+                >
+                  실시간
+                </button>
+                <button
+                  type="button"
+                  className={interpretationMode === "sequential" ? "rt-sub-button rt-sub-button-active" : "rt-sub-button"}
+                  onClick={() => setInterpretationMode("sequential")}
+                  disabled={controlsLocked}
+                >
+                  순차
+                </button>
+              </div>
+            </div>
             <label className="rt-field">
               <span>목표 언어</span>
               <select
@@ -312,14 +342,31 @@ export function InterpreterApp() {
           </div>
 
           <div className="rt-actions">
-            <button
-              type="button"
-              className="rt-button rt-button-primary"
-              onClick={startSession}
-              disabled={controlsLocked}
-            >
-              {status === "connecting" ? "연결 중..." : "서비스 시작하기"}
-            </button>
+            {status === "idle" ? (
+              <button
+                type="button"
+                className="rt-button rt-button-primary"
+                onClick={startSession}
+              >
+                서비스 시작하기
+              </button>
+            ) : status === "connected" && interpretationMode === "sequential" ? (
+              <button
+                type="button"
+                className="rt-button rt-button-primary rt-button-commit"
+                onClick={commitAudio}
+              >
+                말씀 완료 (통역)
+              </button>
+            ) : (
+              <button
+                type="button"
+                disabled
+                className="rt-button rt-button-disabled"
+              >
+                {status === "connecting" ? "연결 중..." : "사용 중..."}
+              </button>
+            )}
             <button
               type="button"
               className="rt-button rt-button-secondary"
