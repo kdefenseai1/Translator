@@ -93,11 +93,17 @@ export function InterpreterApp() {
       const sessionRes = await fetch("/api/realtime/session", { method: "POST" });
       if (!sessionRes.ok) throw new Error("세션 생성에 실패했습니다.");
       const sessionData = await sessionRes.json();
+      
+      // xAI returns { client_secret: { value: "...", ... } } or similar based on docs
       const clientSecret = sessionData.client_secret?.value;
 
       if (!clientSecret) throw new Error("유효한 세션 토큰을 받지 못했습니다.");
 
-      const ws = new WebSocket(`wss://api.x.ai/v1/realtime?model=${REALTIME_MODEL}`);
+      // For browsers, we pass the token in Sec-WebSocket-Protocol
+      const ws = new WebSocket(
+        `wss://api.x.ai/v1/realtime?model=${REALTIME_MODEL}`,
+        [`xai-client-secret.${clientSecret}`]
+      );
       wsRef.current = ws;
 
       ws.onopen = () => {

@@ -8,16 +8,14 @@ export async function POST() {
   }
 
   try {
-    const response = await fetch("https://api.x.ai/v1/realtime/sessions", {
+    const response = await fetch("https://api.x.ai/v1/realtime/client_secrets", {
       method: "POST",
       headers: {
         Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: "grok-beta",
-        modalities: ["audio", "text"],
-        instructions: "You are a helpful translation assistant. Listen to the user and translate their speech as requested.",
+        expires_after: { seconds: 300 },
       }),
     });
 
