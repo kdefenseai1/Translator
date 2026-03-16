@@ -40,7 +40,7 @@ export function InterpreterApp() {
   const [voice, setVoice] = useState<RealtimeVoice>(REALTIME_VOICES[0]);
   const [status, setStatus] = useState<ConnectionStatus>("idle");
   const [statusMessage, setStatusMessage] = useState(
-    "xAI Voice Agent를 통해 실시간 동시 통역을 제공합니다.",
+    "AI Voice Agent를 통한 전문 통역 서비스를 제공합니다.",
   );
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [sourceTurns, setSourceTurns] = useState<SourceTurn[]>([]);
@@ -91,25 +91,19 @@ export function InterpreterApp() {
     if (status !== "idle") return;
 
     setStatus("connecting");
-    setStatusMessage("세션 토큰을 생성하고 서버에 연결 중입니다...");
+    setStatusMessage("AI 통역 엔진을 연결하고 있습니다...");
 
     try {
       const sessionRes = await fetch("/api/realtime/session", { method: "POST" });
       if (!sessionRes.ok) {
         const errJson = await sessionRes.json().catch(() => ({}));
-        console.error("Session fetch failed:", errJson);
         throw new Error(`세션 생성에 실패했습니다: ${errJson.error || sessionRes.statusText}`);
       }
       const sessionData = await sessionRes.json();
-      console.log("Frontend received sessionData:", sessionData);
-      
-      // xAI may return { client_secret: { value: "..." } } (OpenAI style) 
-      // or directly { value: "..." } based on documentation
       const clientSecret = sessionData.client_secret?.value || sessionData.value;
 
       if (!clientSecret) throw new Error("유효한 세션 토큰을 받지 못했습니다.");
 
-      // For browsers, we pass the token in Sec-WebSocket-Protocol
       const ws = new WebSocket(
         `wss://api.x.ai/v1/realtime?model=${REALTIME_MODEL}`,
         [`xai-client-secret.${clientSecret}`]
@@ -118,9 +112,8 @@ export function InterpreterApp() {
 
       ws.onopen = () => {
         setStatus("connected");
-        setStatusMessage("연결되었습니다. 말씀을 시작하세요.");
+        setStatusMessage("전문 통역이 시작되었습니다.");
 
-        // Initial configuration
         const instructions = mode === "interpret" 
           ? buildBidirectionalInstructions(primaryLanguage, secondaryLanguage)
           : buildTranslationInstructions(sourceLanguage, primaryLanguage);
@@ -145,7 +138,6 @@ export function InterpreterApp() {
       ws.onmessage = async (event) => {
         try {
           const data = JSON.parse(event.data);
-          console.log("WS Server Event:", data.type, data);
 
           switch (data.type) {
             case "conversation.item.input_audio_transcription.completed":
@@ -155,7 +147,6 @@ export function InterpreterApp() {
               ]);
               break;
             case "response.output_audio_transcript.delta":
-              // Live translation text delta
               setOutputTurns((prev) => {
                 const last = prev[prev.length - 1];
                 if (last && last.id === data.item_id) {
@@ -166,18 +157,11 @@ export function InterpreterApp() {
                 return [...prev, { id: data.item_id, text: data.delta }];
               });
               break;
-            case "response.output_audio_transcript.done":
-              console.log("Translation finished:", data.transcript);
-              break;
             case "response.output_audio.delta":
               playOutputAudioChunk(data.delta);
               break;
             case "error":
-              console.error("WS Server Error Info:", data.error);
               setErrorMessage(data.error.message || "서버 오류가 발생했습니다.");
-              break;
-            default:
-              // Log other events like session.created, conversation.created etc.
               break;
           }
         } catch (e) {
@@ -213,12 +197,9 @@ export function InterpreterApp() {
 
       processor.onaudioprocess = (e) => {
         if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
-        
-        // In sequential mode, only append when actively speaking
         if (interpretationMode === "sequential" && !isSpeaking) return;
 
         const inputData = e.inputBuffer.getChannelData(0);
-        // Convert Float32 to Int16
         const pcm16 = new Int16Array(inputData.length);
         for (let i = 0; i < inputData.length; i++) {
           pcm16[i] = Math.max(-1, Math.min(1, inputData[i])) * 0x7fff;
@@ -243,6 +224,7 @@ export function InterpreterApp() {
       setErrorMessage("마이크 접근에 실패했습니다.");
     }
   }
+
   function startSpeaking() {
     setIsSpeaking(true);
     setStatusMessage("말씀하세요...");
@@ -250,34 +232,22 @@ export function InterpreterApp() {
 
   function commitAudio() {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
-    
-    // Stop appending immediately
     setIsSpeaking(false);
-
-    // Manual commit for sequential mode to trigger response
     wsRef.current.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
     wsRef.current.send(JSON.stringify({ type: "response.create" }));
-    setStatusMessage("통역 중입니다...");
+    setStatusMessage("AI 가 통역 중입니다...");
   }
-
-  // Very basic audio player for PCM chunks
-  const audioStack: AudioBuffer[] = [];
-  let isPlaying = false;
 
   async function playOutputAudioChunk(base64: string) {
     if (!audioContextRef.current) return;
-
     const binary = atob(base64);
     const bytes = new Uint8Array(binary.length);
     for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-    
     const pcm16 = new Int16Array(bytes.buffer);
     const float32 = new Float32Array(pcm16.length);
     for (let i = 0; i < pcm16.length; i++) float32[i] = pcm16[i] / 0x7fff;
-
     const buffer = audioContextRef.current.createBuffer(1, float32.length, 24000);
     buffer.getChannelData(0).set(float32);
-    
     const source = audioContextRef.current.createBufferSource();
     source.buffer = buffer;
     source.connect(audioContextRef.current.destination);
@@ -285,200 +255,154 @@ export function InterpreterApp() {
   }
 
   return (
-    <main className="rt-shell wv-style">
-      <div className="rt-noise rt-noise-a" />
-      <div className="rt-noise rt-noise-b" />
-
-      <section className="rt-hero wv-hero">
+    <main className="rt-shell">
+      {/* Header */}
+      <header className="rt-header">
         <h1>동통사</h1>
-        <p>실시간 인공지능 동시 통역사 (xAI Powered)</p>
+        <p>Professional AI Interpretation & Translation</p>
+      </header>
+
+      {/* Connection Status & Mode Info */}
+      <div className="rt-status-bar">
+        <span className={`rt-status-pill ${mode === "interpret" ? "active" : ""}`}>
+          {mode === "interpret" ? "통역 모드" : "번역 모드"}
+        </span>
+        <span className={`rt-status-pill ${interpretationMode === "realtime" ? "active" : ""}`}>
+          {interpretationMode === "realtime" ? "실시간" : "순차"}
+        </span>
+        <span className="rt-status-pill">
+          {status === "connected" ? "연결됨" : status === "connecting" ? "연결 중" : "대기 중"}
+        </span>
+      </div>
+
+      {/* Main Conversation Flow */}
+      <section className="rt-conversation">
+        {sourceTurns.length === 0 && outputTurns.length === 0 && (
+          <div className="glass-card" style={{ padding: '48px 24px', textAlign: 'center', marginTop: '20px' }}>
+            <p style={{ color: 'var(--text-secondary)', fontSize: '1.1rem', margin: 0 }}>
+              {status === "connected" 
+                ? "상단의 언어 설정을 확인하고 말씀을 시작해 주세요." 
+                : "서비스 시작하기 버튼을 눌러 AI 통역사를 연결하세요."}
+            </p>
+          </div>
+        )}
+
+        {sourceTurns.map((sTurn, index) => {
+          const oTurn = outputTurns.find(ot => ot.id === sTurn.id) || outputTurns[index];
+          
+          return (
+            <div key={sTurn.id} style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              <div className="rt-turn-wrapper left">
+                <span className="rt-turn-label">{getLanguageLabel(mode === "interpret" ? primaryLanguage : sourceLanguage)}</span>
+                <div className="rt-bubble glass-card">{sTurn.text}</div>
+              </div>
+              {oTurn && (
+                <div className="rt-turn-wrapper right">
+                  <span className="rt-turn-label" style={{ textAlign: 'right' }}>{getLanguageLabel(mode === "interpret" ? secondaryLanguage : primaryLanguage)}</span>
+                  <div className="rt-bubble glass-card">{oTurn.text}</div>
+                </div>
+              )}
+            </div>
+          );
+        })}
+
+        {isSpeaking && (
+          <div className="rt-turn-wrapper left">
+            <span className="rt-turn-label">듣는 중...</span>
+            <div className="rt-bubble rt-bubble-live glass-card" style={{ borderStyle: 'dashed' }}>
+              말씀하시는 내용을 분석하고 있습니다...
+            </div>
+          </div>
+        )}
       </section>
 
-      <section className="rt-workspace wv-workspace">
-        <aside className="rt-card rt-control-card wv-card">
-          <div className="rt-card-heading">
-            <h2>설정 제어</h2>
-            <p>언어 및 동작 모드를 선택하고 연결을 시작하세요.</p>
-          </div>
-
-          <div className="rt-mode-toggle">
-            <button
-              type="button"
-              className={mode === "translate" ? "rt-mode-button rt-mode-button-active" : "rt-mode-button"}
-              onClick={() => setMode("translate")}
+      {/* Floating Controls Hub */}
+      <div className="rt-controls-hub">
+        <div className="glass-card rt-controls-inner">
+          <div className="rt-control-row">
+            <select
+              className="rt-select"
+              value={mode}
+              onChange={(e) => setMode(e.target.value as RealtimeMode)}
               disabled={controlsLocked}
             >
-              번역 모드
-            </button>
-            <button
-              type="button"
-              className={mode === "interpret" ? "rt-mode-button rt-mode-button-active" : "rt-mode-button"}
-              onClick={() => setMode("interpret")}
+              <option value="interpret">통역 모드 (양방향)</option>
+              <option value="translate">번역 모드 (일방향)</option>
+            </select>
+
+            <select
+              className="rt-select"
+              value={interpretationMode}
+              onChange={(e) => setInterpretationMode(e.target.value as any)}
               disabled={controlsLocked}
             >
-              통역 모드
-            </button>
+              <option value="realtime">실시간 (자동 감지)</option>
+              <option value="sequential">순차 (수동 제어)</option>
+            </select>
           </div>
 
-          <div className="rt-control-stack">
-            <div className="rt-field">
-              <span>작동 방식</span>
-              <div className="rt-sub-toggle">
-                <button
-                  type="button"
-                  className={interpretationMode === "realtime" ? "rt-sub-button rt-sub-button-active" : "rt-sub-button"}
-                  onClick={() => setInterpretationMode("realtime")}
-                  disabled={controlsLocked}
-                >
-                  실시간
-                </button>
-                <button
-                  type="button"
-                  className={interpretationMode === "sequential" ? "rt-sub-button rt-sub-button-active" : "rt-sub-button"}
-                  onClick={() => setInterpretationMode("sequential")}
-                  disabled={controlsLocked}
-                >
-                  순차
-                </button>
-              </div>
-            </div>
-            {mode === "interpret" ? (
-              <>
-                <label className="rt-field">
-                  <span>언어 1 (보통 한국어)</span>
-                  <select
-                    value={primaryLanguage}
-                    onChange={(e) => setPrimaryLanguage(e.target.value)}
-                    disabled={controlsLocked}
-                  >
-                    {LANGUAGE_OPTIONS.map((lang) => (
-                      <option key={lang.code} value={lang.code}>{lang.label}</option>
-                    ))}
-                  </select>
-                </label>
-                <label className="rt-field">
-                  <span>언어 2 (통역 대상)</span>
-                  <select
-                    value={secondaryLanguage}
-                    onChange={(e) => setSecondaryLanguage(e.target.value)}
-                    disabled={controlsLocked}
-                  >
-                    {LANGUAGE_OPTIONS.map((lang) => (
-                      <option key={lang.code} value={lang.code}>{lang.label}</option>
-                    ))}
-                  </select>
-                </label>
-              </>
-            ) : (
-              <label className="rt-field">
-                <span>목표 언어</span>
-                <select
-                  value={primaryLanguage}
-                  onChange={(e) => setPrimaryLanguage(e.target.value)}
-                  disabled={controlsLocked}
-                >
-                  {LANGUAGE_OPTIONS.map((lang) => (
-                    <option key={lang.code} value={lang.code}>{lang.label}</option>
-                  ))}
-                </select>
-              </label>
-            )}
-
-            <label className="rt-field">
-              <span>음성</span>
-              <select
-                value={voice}
-                onChange={(e) => setVoice(e.target.value as RealtimeVoice)}
-                disabled={controlsLocked}
-              >
-                {REALTIME_VOICES.map((v) => (
-                  <option key={v} value={v}>{v}</option>
-                ))}
-              </select>
-            </label>
+          <div className="rt-control-row">
+            <select
+              className="rt-select"
+              value={mode === "interpret" ? primaryLanguage : sourceLanguage}
+              onChange={(e) => mode === "interpret" ? setPrimaryLanguage(e.target.value) : setSourceLanguage(e.target.value)}
+              disabled={controlsLocked}
+            >
+              {LANGUAGE_OPTIONS.map((lang) => (
+                <option key={lang.code} value={lang.code}>{lang.label}</option>
+              ))}
+            </select>
+            <div style={{ color: 'var(--text-muted)', fontWeight: 'bold' }}>➝</div>
+            <select
+              className="rt-select"
+              value={mode === "interpret" ? secondaryLanguage : primaryLanguage}
+              onChange={(e) => mode === "interpret" ? setSecondaryLanguage(e.target.value) : setPrimaryLanguage(e.target.value)}
+              disabled={controlsLocked}
+            >
+              {LANGUAGE_OPTIONS.map((lang) => (
+                <option key={lang.code} value={lang.code}>{lang.label}</option>
+              ))}
+            </select>
           </div>
 
-          <div className="rt-actions">
-            {status === "idle" ? (
-              <button
-                type="button"
-                className="rt-button rt-button-primary"
-                onClick={startSession}
-              >
+          <div className="rt-control-row" style={{ marginTop: '4px' }}>
+            {status === "idle" || status === "error" ? (
+              <button className="rt-btn-main" onClick={startSession}>
+                <div className="rt-mic-visualizer" />
                 서비스 시작하기
               </button>
             ) : status === "connected" && interpretationMode === "sequential" ? (
               !isSpeaking ? (
-                <button
-                  type="button"
-                  className="rt-button rt-button-primary"
-                  onClick={startSpeaking}
-                >
+                <button className="rt-btn-main" onClick={startSpeaking}>
+                  <div className="rt-mic-visualizer" />
                   말씀 시작하기
                 </button>
               ) : (
-                <button
-                  type="button"
-                  className="rt-button rt-button-primary rt-button-commit"
-                  onClick={commitAudio}
-                >
-                  말씀 완료 (통역)
+                <button className="rt-btn-main" onClick={commitAudio}>
+                  <div className="rt-mic-visualizer active" />
+                  말씀 완료 (통역하기)
                 </button>
               )
             ) : (
-              <button
-                type="button"
-                disabled
-                className="rt-button rt-button-disabled"
-              >
-                {status === "connecting" ? "연결 중..." : "사용 중..."}
+              <button className="rt-btn-main rt-btn-main-stop" onClick={stopSession}>
+                {status === "connecting" ? "연결 중..." : "서비스 종료"}
               </button>
             )}
-            <button
-              type="button"
-              className="rt-button rt-button-secondary"
-              onClick={stopSession}
-              disabled={!controlsLocked}
-            >
-              종료
-            </button>
           </div>
 
-          <div className="rt-status-copy">
-            <p>{statusMessage}</p>
-            {errorMessage && <p className="rt-error-copy">{errorMessage}</p>}
-          </div>
-        </aside>
-
-        <section className="rt-card rt-surface-card wv-card">
-          <div className="rt-card-heading">
-            <h2>실시간 대화 내역</h2>
-          </div>
-
-          <div className="rt-surface-grid wv-surface-grid">
-            <article className="rt-surface-pane">
-              <header><h3>인식된 음성</h3></header>
-              <div className="rt-scrollbox">
-                {sourceTurns.map((turn) => (
-                  <div key={turn.id} className="rt-turn rt-turn-final"><p>{turn.text}</p></div>
-                ))}
-                {isCapturing && (
-                  <div className="rt-turn rt-turn-live"><p>말씀하시는 중...</p></div>
-                )}
-              </div>
-            </article>
-
-            <article className="rt-surface-pane">
-              <header><h3>번역 결과</h3></header>
-              <div className="rt-scrollbox">
-                {outputTurns.map((turn) => (
-                  <div key={turn.id} className="rt-turn rt-turn-audio-final"><p>{turn.text}</p></div>
-                ))}
-              </div>
-            </article>
-          </div>
-        </section>
-      </section>
+          {(errorMessage || statusMessage) && (
+            <p style={{ 
+              color: errorMessage ? 'var(--danger)' : 'var(--text-secondary)', 
+              fontSize: '0.8rem', 
+              margin: '0', 
+              textAlign: 'center',
+              opacity: 0.8 
+            }}>
+              {errorMessage || statusMessage}
+            </p>
+          )}
+        </div>
+      </div>
     </main>
   );
 }
