@@ -10,6 +10,7 @@ import {
   REALTIME_MODEL,
   REALTIME_VOICES,
   buildTranslationInstructions,
+  buildBidirectionalInstructions,
 } from "@/lib/realtime/session-config";
 
 type ConnectionStatus = "idle" | "connecting" | "connected" | "error";
@@ -32,9 +33,10 @@ export function InterpreterApp() {
   const micStreamRef = useRef<MediaStream | null>(null);
   const audioBufferRef = useRef<Int16Array[]>([]);
 
-  const [mode, setMode] = useState<RealtimeMode>("translate");
+  const [mode, setMode] = useState<RealtimeMode>("interpret"); // Default to interpret for bidirectional
   const [sourceLanguage, setSourceLanguage] = useState(SOURCE_AUTO);
-  const [targetLanguage, setTargetLanguage] = useState("ko");
+  const [primaryLanguage, setPrimaryLanguage] = useState("ko");
+  const [secondaryLanguage, setSecondaryLanguage] = useState("en");
   const [voice, setVoice] = useState<RealtimeVoice>(REALTIME_VOICES[0]);
   const [status, setStatus] = useState<ConnectionStatus>("idle");
   const [statusMessage, setStatusMessage] = useState(
@@ -119,11 +121,15 @@ export function InterpreterApp() {
         setStatusMessage("연결되었습니다. 말씀을 시작하세요.");
 
         // Initial configuration
+        const instructions = mode === "interpret" 
+          ? buildBidirectionalInstructions(primaryLanguage, secondaryLanguage)
+          : buildTranslationInstructions(sourceLanguage, primaryLanguage);
+
         const sessionUpdate = {
           type: "session.update",
           session: {
             modalities: ["audio", "text"],
-            instructions: buildTranslationInstructions(sourceLanguage, targetLanguage),
+            instructions: instructions,
             voice: voice,
             input_audio_format: "pcm16",
             output_audio_format: "pcm16",
@@ -336,18 +342,47 @@ export function InterpreterApp() {
                 </button>
               </div>
             </div>
-            <label className="rt-field">
-              <span>목표 언어</span>
-              <select
-                value={targetLanguage}
-                onChange={(e) => setTargetLanguage(e.target.value)}
-                disabled={controlsLocked}
-              >
-                {LANGUAGE_OPTIONS.map((lang) => (
-                  <option key={lang.code} value={lang.code}>{lang.label}</option>
-                ))}
-              </select>
-            </label>
+            {mode === "interpret" ? (
+              <>
+                <label className="rt-field">
+                  <span>언어 1 (보통 한국어)</span>
+                  <select
+                    value={primaryLanguage}
+                    onChange={(e) => setPrimaryLanguage(e.target.value)}
+                    disabled={controlsLocked}
+                  >
+                    {LANGUAGE_OPTIONS.map((lang) => (
+                      <option key={lang.code} value={lang.code}>{lang.label}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="rt-field">
+                  <span>언어 2 (통역 대상)</span>
+                  <select
+                    value={secondaryLanguage}
+                    onChange={(e) => setSecondaryLanguage(e.target.value)}
+                    disabled={controlsLocked}
+                  >
+                    {LANGUAGE_OPTIONS.map((lang) => (
+                      <option key={lang.code} value={lang.code}>{lang.label}</option>
+                    ))}
+                  </select>
+                </label>
+              </>
+            ) : (
+              <label className="rt-field">
+                <span>목표 언어</span>
+                <select
+                  value={primaryLanguage}
+                  onChange={(e) => setPrimaryLanguage(e.target.value)}
+                  disabled={controlsLocked}
+                >
+                  {LANGUAGE_OPTIONS.map((lang) => (
+                    <option key={lang.code} value={lang.code}>{lang.label}</option>
+                  ))}
+                </select>
+              </label>
+            )}
 
             <label className="rt-field">
               <span>음성</span>

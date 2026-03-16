@@ -66,6 +66,22 @@ export function buildTranslationInstructions(source: SourceLanguageCode, target:
   ].join(" ");
 }
 
+export function buildBidirectionalInstructions(langA: string, langB: string) {
+  const labelA = getLanguageLabel(langA);
+  const labelB = getLanguageLabel(langB);
+
+  return [
+    "당신은 고도로 지능적인 양방향 실시간 음성 통역 엔진입니다.",
+    `현재 대화는 ${labelA}와 ${labelB} 두 가지 언어로 진행됩니다.`,
+    `1. 사용자가 ${labelA}로 말하면 즉시 ${labelB}로 번역하여 출력하세요.`,
+    `2. 사용자가 ${labelB}로 말하면 즉시 ${labelA}로 번역하여 출력하세요.`,
+    "입력 언어를 자동으로 감지하여 적절한 대상 언어로 번역하는 것이 당신의 핵심 임무입니다.",
+    "의미, 어조, 감정을 그대로 전달하세요.",
+    "번역된 텍스트 외에 설명이나 인사말 등 부가적인 답변은 절대 하지 마세요.",
+    "오직 번역된 결과만 출력하세요.",
+  ].join(" ");
+}
+
 export function describeSpeechProvider() {
   return "xAI Voice Agent (Realtime)";
 }
